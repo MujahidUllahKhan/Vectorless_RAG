@@ -34,21 +34,37 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 MODEL = os.getenv('LLM_MODEL', 'llama-3.3-70b-versatile')
 
 # Initialize PageIndex client
+# Try both old and new API signatures
 if GROQ_API_KEY:
-    # Use Groq via LiteLLM prefix
     print("✅ Using Groq with PageIndex")
-    pageindex_client = PageIndexClient(
-        api_key=GROQ_API_KEY,
-        model=f"groq/{MODEL}",
-        workspace=str(WORKSPACE)
-    )
+    # Set environment variable for PageIndex to use
+    os.environ["OPENAI_API_KEY"] = GROQ_API_KEY
+    os.environ["OPENAI_BASE_URL"] = "https://api.groq.com/openai/v1"
+    
+    try:
+        # Try new API (GitHub version)
+        pageindex_client = PageIndexClient(
+            api_key=GROQ_API_KEY,
+            model=f"groq/{MODEL}",
+            workspace=str(WORKSPACE)
+        )
+    except TypeError:
+        # Fallback to old API (PyPI version)
+        print("⚠️ Using older PageIndex API")
+        pageindex_client = PageIndexClient(workspace=str(WORKSPACE))
+        
 elif OPENAI_API_KEY:
     print("✅ Using OpenAI with PageIndex")
-    pageindex_client = PageIndexClient(
-        api_key=OPENAI_API_KEY,
-        model="gpt-4o-mini",
-        workspace=str(WORKSPACE)
-    )
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+    
+    try:
+        pageindex_client = PageIndexClient(
+            api_key=OPENAI_API_KEY,
+            model="gpt-4o-mini",
+            workspace=str(WORKSPACE)
+        )
+    except TypeError:
+        pageindex_client = PageIndexClient(workspace=str(WORKSPACE))
 else:
     print("⚠️ WARNING: No API key configured!")
     pageindex_client = None
