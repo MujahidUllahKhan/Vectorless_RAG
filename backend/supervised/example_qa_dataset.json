@@ -1,0 +1,50 @@
+[
+  {
+    "question": "What is the main objective of this research?",
+    "ground_truth_answer": "The main objective is to develop a vectorless RAG system that uses hierarchical tree indexing for improved retrieval accuracy.",
+    "relevant_node_ids": ["node_0002"],
+    "context_needed": "Introduction or Abstract section",
+    "difficulty": "easy",
+    "category": "general"
+  },
+  {
+    "question": "What methodology was employed in the study?",
+    "ground_truth_answer": "The study employed LLM-based tree construction and reasoning-based retrieval over hierarchical document structure.",
+    "relevant_node_ids": ["node_0004", "node_0005"],
+    "context_needed": "Methodology section and its subsections",
+    "difficulty": "medium",
+    "category": "methods"
+  },
+  {
+    "question": "What were the main findings or results?",
+    "ground_truth_answer": "The main finding was that tree-based RAG achieved 98.7% accuracy on FinanceBench compared to 80% for traditional vector RAG.",
+    "relevant_node_ids": ["node_0006", "node_0007"],
+    "context_needed": "Results and Discussion sections",
+    "difficulty": "medium",
+    "category": "results"
+  },
+  {
+    "question": "How does the proposed system compare to existing approaches?",
+    "ground_truth_answer": "The proposed system outperforms vector-based RAG in accuracy, explainability, and citation quality while requiring no vector database infrastructure.",
+    "relevant_node_ids": ["node_0003", "node_0006", "node_0008"],
+    "context_needed": "Literature Review, Results, and Discussion sections",
+    "difficulty": "hard",
+    "category": "comparison"
+  },
+  {
+    "question": "What are the limitations of the proposed approach?",
+    "ground_truth_answer": "Limitations include higher latency due to LLM reasoning, dependency on document structure quality, and increased API costs compared to local vector search.",
+    "relevant_node_ids": ["node_0008", "node_0009"],
+    "context_needed": "Discussion and Conclusion sections",
+    "difficulty": "medium",
+    "category": "analysis"
+  },
+  {
+    "question": "What future work is suggested?",
+    "ground_truth_answer": "Future work includes hybrid approaches combining tree and vector retrieval, optimization for longer documents, and extension to multi-document scenarios.",
+    "relevant_node_ids": ["node_0009"],
+    "context_needed": "Future Work or Conclusion section",
+    "difficulty": "easy",
+    "category": "future_work"
+  }
+]

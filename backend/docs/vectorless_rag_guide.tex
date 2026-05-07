@@ -1,0 +1,602 @@
+\documentclass[12pt,a4paper]{article}
+
+% Packages
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usepackage{tcolorbox}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{float}
+
+% Page geometry
+\geometry{
+    left=2.5cm,
+    right=2.5cm,
+    top=3cm,
+    bottom=3cm
+}
+
+% Code listing settings
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!60!black},
+    stringstyle=\color{red},
+    showstringspaces=false,
+    language=Python,
+    captionpos=b,
+    tabsize=4
+}
+
+% TikZ libraries
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning, trees, shadows, decorations.pathreplacing}
+
+% Colors
+\definecolor{maincolor}{RGB}{0,102,204}
+\definecolor{accentcolor}{RGB}{255,102,0}
+\definecolor{successcolor}{RGB}{0,153,51}
+\definecolor{warningcolor}{RGB}{204,0,0}
+
+% Custom boxes
+\newtcolorbox{conceptbox}[1]{
+    colback=blue!5!white,
+    colframe=maincolor,
+    fonttitle=\bfseries,
+    title=#1
+}
+
+\newtcolorbox{examplebox}[1]{
+    colback=green!5!white,
+    colframe=successcolor,
+    fonttitle=\bfseries,
+    title=#1
+}
+
+\newtcolorbox{warningbox}[1]{
+    colback=red!5!white,
+    colframe=warningcolor,
+    fonttitle=\bfseries,
+    title=#1
+}
+
+% Title information
+\title{
+    \huge\textbf{Vectorless RAG System} \\
+    \Large Hierarchical Tree-Based Retrieval with Supervised Learning \\
+    \large Complete Implementation \& Theoretical Guide
+}
+\author{
+    PhD Research Implementation \\
+    Industrial Engineering, NMSU
+}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{Introduction}
+% ============================================================================
+
+\subsection{Overview}
+
+This document provides a comprehensive guide to implementing and understanding a \textbf{Vectorless RAG (Retrieval-Augmented Generation)} system. Unlike traditional vector-based RAG systems that rely on embedding similarity, this approach uses \textbf{hierarchical tree indexing} and \textbf{LLM-based reasoning} for retrieval.
+
+\begin{conceptbox}{Key Innovation}
+Traditional RAG systems use the following pipeline:
+\begin{enumerate}
+    \item \textbf{Chunking}: Split documents into fixed-size pieces
+    \item \textbf{Embedding}: Convert chunks to vector representations
+    \item \textbf{Similarity Search}: Retrieve chunks via cosine similarity
+    \item \textbf{Generation}: Generate answers from retrieved chunks
+\end{enumerate}
+
+The fundamental flaw: \textbf{Similarity $\neq$ Relevance}
+
+Our vectorless approach:
+\begin{enumerate}
+    \item \textbf{Tree Construction}: Build hierarchical index respecting document structure
+    \item \textbf{LLM Reasoning}: Use LLM to reason over tree structure
+    \item \textbf{Precise Retrieval}: Retrieve exact sections with traceability
+    \item \textbf{Cited Generation}: Generate answers with clear provenance
+\end{enumerate}
+\end{conceptbox}
+
+\subsection{Why Vectorless RAG?}
+
+\subsubsection{Limitations of Vector-Based RAG}
+
+\begin{enumerate}
+    \item \textbf{Arbitrary Chunking}: Fixed-size chunks (e.g., 512 tokens) destroy document structure
+    \begin{itemize}
+        \item A 500-token chunk might cut a paragraph mid-sentence
+        \item Section boundaries are lost
+        \item Context is fragmented
+    \end{itemize}
+    
+    \item \textbf{Semantic Similarity $\neq$ Factual Relevance}
+    \begin{itemize}
+        \item Query: ``What was EBITDA in Q3?''
+        \item Vector search might retrieve: ``Market conditions affected Q3 performance'' (high word overlap)
+        \item Misses: ``Q3 EBITDA: \$42M'' (different words, same topic)
+    \end{itemize}
+    
+    \item \textbf{No Explainability}
+    \begin{itemize}
+        \item Cosine similarity scores are opaque
+        \item Cannot explain why a chunk was retrieved
+        \item No clear citation trail
+    \end{itemize}
+    
+    \item \textbf{Domain Knowledge Injection is Hard}
+    \begin{itemize}
+        \item Requires embedding fine-tuning
+        \item Cannot easily add rules like ``For financial queries, prioritize MD\&A section''
+    \end{itemize}
+\end{enumerate}
+
+\subsubsection{Advantages of Tree-Based RAG}
+
+\begin{enumerate}
+    \item \textbf{Respects Document Structure}
+    \begin{itemize}
+        \item Preserves chapters, sections, subsections as authors intended
+        \item No arbitrary chunking
+        \item Natural boundaries for context
+    \end{itemize}
+    
+    \item \textbf{Traceable Retrieval}
+    \begin{itemize}
+        \item Each retrieved node has: title, page numbers, hierarchical position
+        \item LLM provides reasoning for why a section was retrieved
+        \item Full citation trail
+    \end{itemize}
+    
+    \item \textbf{Domain Expertise via Prompts}
+    \begin{itemize}
+        \item Add expert rules as plain text
+        \item No model retraining required
+        \item Example: ``For revenue questions, check Financial Statements first''
+    \end{itemize}
+    
+    \item \textbf{Superior Performance}
+    \begin{itemize}
+        \item FinanceBench benchmark: 98.7\% accuracy vs 80\% for vector RAG
+        \item Fewer hallucinations due to precise retrieval
+        \item Better handling of multi-hop questions
+    \end{itemize}
+\end{enumerate}
+
+\subsection{System Components}
+
+The vectorless RAG system consists of four main components:
+
+\begin{enumerate}
+    \item \textbf{PDF Processor}: Extracts text page-by-page while preserving structure
+    \item \textbf{Tree Builder}: Constructs hierarchical index using LLM
+    \item \textbf{LLM Tree Searcher}: Reasons over tree to find relevant sections
+    \item \textbf{Answer Generator}: Produces cited answers from retrieved content
+\end{enumerate}
+
+Additionally, we include:
+
+\begin{enumerate}[resume]
+    \item \textbf{Supervised Evaluator}: Tests system on ground-truth QA pairs
+    \item \textbf{Domain Rule Learner}: Suggests improvements from failure patterns
+\end{enumerate}
+
+\subsection{Document Scope}
+
+This guide covers:
+
+\begin{itemize}
+    \item \textbf{Section 2}: Theoretical foundations and mathematical formulations
+    \item \textbf{Section 3}: Tree construction algorithms
+    \item \textbf{Section 4}: LLM-based retrieval mechanisms
+    \item \textbf{Section 5}: Answer generation with citations
+    \item \textbf{Section 6}: Supervised learning and evaluation
+    \item \textbf{Section 7}: Implementation details and code walkthrough
+    \item \textbf{Section 8}: Usage examples and case studies
+    \item \textbf{Section 9}: Future adaptations and customization
+\end{itemize}
+
+% ============================================================================
+\section{Theoretical Foundations}
+% ============================================================================
+
+\subsection{Mathematical Framework}
+
+\subsubsection{Document Representation}
+
+Let $D$ be a document consisting of $n$ pages:
+\begin{equation}
+D = \{p_1, p_2, \ldots, p_n\}
+\end{equation}
+
+where each page $p_i$ contains text content $T_i$.
+
+\subsubsection{Tree Structure}
+
+The document is represented as a hierarchical tree $\mathcal{T}$ where:
+
+\begin{equation}
+\mathcal{T} = (V, E)
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $V$ is the set of nodes (document sections)
+    \item $E$ is the set of directed edges (parent-child relationships)
+\end{itemize}
+
+Each node $v \in V$ is defined as:
+
+\begin{equation}
+v = (\text{id}, \text{title}, p_{\text{start}}, p_{\text{end}}, \ell, s, c, \text{children})
+\end{equation}
+
+where:
+\begin{align*}
+\text{id} &: \text{Unique identifier} \\
+\text{title} &: \text{Section title} \\
+p_{\text{start}} &: \text{Starting page number} \\
+p_{\text{end}} &: \text{Ending page number} \\
+\ell &: \text{Depth level in tree} \\
+s &: \text{Optional summary} \\
+c &: \text{Text content} \\
+\text{children} &: \text{Set of child nodes}
+\end{align*}
+
+\subsubsection{Tree Properties}
+
+The tree $\mathcal{T}$ must satisfy:
+
+\begin{enumerate}
+    \item \textbf{Single Root}: $\exists! r \in V$ such that $\text{in-degree}(r) = 0$
+    
+    \item \textbf{Connectivity}: $\forall v \in V$, $\exists$ path from $r$ to $v$
+    
+    \item \textbf{Page Coverage}: 
+    \begin{equation}
+    \bigcup_{v \in V} [p_{\text{start}}(v), p_{\text{end}}(v)] = [1, n]
+    \end{equation}
+    
+    \item \textbf{Hierarchical Consistency}:
+    If $v_p$ is parent of $v_c$, then:
+    \begin{equation}
+    [p_{\text{start}}(v_c), p_{\text{end}}(v_c)] \subseteq [p_{\text{start}}(v_p), p_{\text{end}}(v_p)]
+    \end{equation}
+\end{enumerate}
+
+\subsection{Retrieval as Reasoning Problem}
+
+\subsubsection{Traditional Vector Retrieval}
+
+In vector-based RAG, retrieval is formulated as:
+
+\begin{equation}
+\text{retrieve}(q, D) = \arg\max_{c \in C} \text{sim}(\mathbf{e}_q, \mathbf{e}_c)
+\end{equation}
+
+where:
+\begin{align*}
+q &: \text{Query text} \\
+C &: \text{Set of document chunks} \\
+\mathbf{e}_q &: \text{Embedding of query} \\
+\mathbf{e}_c &: \text{Embedding of chunk } c \\
+\text{sim}(\cdot, \cdot) &: \text{Similarity function (e.g., cosine)}
+\end{align*}
+
+\textbf{Problem}: This assumes relevance is captured by embedding similarity, which often fails.
+
+\subsubsection{Tree-Based Reasoning Retrieval}
+
+In our approach, retrieval is a reasoning task:
+
+\begin{equation}
+\text{retrieve}(q, \mathcal{T}) = \text{LLM}_{\text{reason}}(q, \mathcal{T}_{\text{repr}})
+\end{equation}
+
+where:
+\begin{align*}
+\mathcal{T}_{\text{repr}} &: \text{Text representation of tree structure} \\
+\text{LLM}_{\text{reason}} &: \text{LLM performing symbolic reasoning}
+\end{align*}
+
+The LLM considers:
+\begin{itemize}
+    \item Node titles and summaries
+    \item Hierarchical relationships
+    \item Page ranges
+    \item Domain-specific rules (if provided)
+\end{itemize}
+
+\subsubsection{Retrieval Algorithm}
+
+\begin{algorithm}[H]
+\caption{LLM Tree Search}
+\begin{algorithmic}[1]
+\Require Query $q$, Tree $\mathcal{T}$, Max nodes $k$, Domain rules $R$
+\Ensure Set of relevant node IDs $N_{\text{ret}}$
+
+\State $\mathcal{T}_{\text{repr}} \gets \text{TreeToText}(\mathcal{T})$
+\State $\text{prompt} \gets \text{BuildSearchPrompt}(q, \mathcal{T}_{\text{repr}}, k, R)$
+\State $\text{response} \gets \text{LLM}(\text{prompt})$
+\State $\text{result} \gets \text{ParseJSON}(\text{response})$
+\State $N_{\text{ret}} \gets \text{result.node\_ids}$
+\State $\text{reasoning} \gets \text{result.reasoning}$
+\State \Return $N_{\text{ret}}$, $\text{reasoning}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Supervised Learning Framework}
+
+\subsubsection{Ground Truth Representation}
+
+A supervised QA pair is defined as:
+
+\begin{equation}
+\langle q, a^*, N^*, C^* \rangle
+\end{equation}
+
+where:
+\begin{align*}
+q &: \text{Question text} \\
+a^* &: \text{Ground truth answer} \\
+N^* &: \text{Set of relevant node IDs} \\
+C^* &: \text{Required context description}
+\end{align*}
+
+\subsubsection{Retrieval Metrics}
+
+Given retrieved nodes $N_{\text{ret}}$ and ground truth $N^*$:
+
+\paragraph{Precision}
+\begin{equation}
+P = \frac{|N_{\text{ret}} \cap N^*|}{|N_{\text{ret}}|}
+\end{equation}
+
+\paragraph{Recall}
+\begin{equation}
+R = \frac{|N_{\text{ret}} \cap N^*|}{|N^*|}
+\end{equation}
+
+\paragraph{F1 Score}
+\begin{equation}
+F_1 = 2 \cdot \frac{P \cdot R}{P + R}
+\end{equation}
+
+\paragraph{Mean Reciprocal Rank (MRR)}
+\begin{equation}
+\text{MRR} = \frac{1}{\text{rank}_{\text{first}}}
+\end{equation}
+
+where $\text{rank}_{\text{first}}$ is the position of the first relevant node in $N_{\text{ret}}$.
+
+\paragraph{Normalized Discounted Cumulative Gain (NDCG)}
+\begin{equation}
+\text{DCG}_k = \sum_{i=1}^{k} \frac{\text{rel}_i}{\log_2(i + 1)}
+\end{equation}
+
+\begin{equation}
+\text{NDCG}_k = \frac{\text{DCG}_k}{\text{IDCG}_k}
+\end{equation}
+
+where $\text{rel}_i = 1$ if node at position $i$ is relevant, else 0.
+
+\subsubsection{Answer Quality Metrics}
+
+Given generated answer $\hat{a}$ and ground truth $a^*$:
+
+\paragraph{ROUGE-1 (Unigram Overlap)}
+\begin{equation}
+\text{ROUGE-1} = \frac{2 \cdot P_{\text{unigram}} \cdot R_{\text{unigram}}}{P_{\text{unigram}} + R_{\text{unigram}}}
+\end{equation}
+
+where:
+\begin{align*}
+P_{\text{unigram}} &= \frac{|\text{words}(\hat{a}) \cap \text{words}(a^*)|}{|\text{words}(\hat{a})|} \\
+R_{\text{unigram}} &= \frac{|\text{words}(\hat{a}) \cap \text{words}(a^*)|}{|\text{words}(a^*)|}
+\end{align*}
+
+\paragraph{ROUGE-L (Longest Common Subsequence)}
+\begin{equation}
+\text{ROUGE-L} = \frac{2 \cdot P_{\text{LCS}} \cdot R_{\text{LCS}}}{P_{\text{LCS}} + R_{\text{LCS}}}
+\end{equation}
+
+where LCS is the longest common subsequence of words.
+
+\paragraph{Semantic Similarity}
+\begin{equation}
+\text{sim}_{\text{semantic}}(\hat{a}, a^*) = \frac{\mathbf{emb}(\hat{a}) \cdot \mathbf{emb}(a^*)}{\|\mathbf{emb}(\hat{a})\| \cdot \|\mathbf{emb}(a^*)\|}
+\end{equation}
+
+where $\mathbf{emb}(\cdot)$ is an embedding function (e.g., OpenAI text-embedding-3-small).
+
+% ============================================================================
+\section{Tree Construction}
+% ============================================================================
+
+\subsection{PDF Text Extraction}
+
+\subsubsection{Page-Level Extraction}
+
+The first step is extracting text from PDF while preserving page boundaries:
+
+\begin{algorithm}[H]
+\caption{Extract PDF Pages}
+\begin{algorithmic}[1]
+\Require PDF file path $f$
+\Ensure List of $(page\_num, text)$ tuples $P$
+
+\State $\text{pdf} \gets \text{OpenPDF}(f)$
+\State $n \gets \text{pdf.num\_pages}$
+\State $P \gets []$
+
+\For{$i = 1$ to $n$}
+    \State $\text{page} \gets \text{pdf.get\_page}(i)$
+    \State $\text{text} \gets \text{page.extract\_text()}$
+    \State $P.\text{append}((i, \text{text}))$
+\EndFor
+
+\State \Return $P$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{conceptbox}{Why Page-Level Extraction?}
+Unlike chunking, which arbitrarily splits text, page-level extraction:
+\begin{itemize}
+    \item Preserves natural document boundaries
+    \item Enables accurate page citations
+    \item Allows tree nodes to reference page ranges
+    \item Maintains context integrity
+\end{itemize}
+\end{conceptbox}
+
+\subsection{Table of Contents Detection}
+
+\subsubsection{LLM-Based TOC Extraction}
+
+Many professional documents contain a Table of Contents. We use an LLM to extract it:
+
+\begin{algorithm}[H]
+\caption{Extract Table of Contents}
+\begin{algorithmic}[1]
+\Require First $k$ pages $P_{\text{first}}$
+\Ensure TOC entries or $\emptyset$
+
+\State $\text{text} \gets \text{Concatenate}(P_{\text{first}})$
+\State $\text{prompt} \gets \text{BuildTOCPrompt}(\text{text})$
+\State $\text{response} \gets \text{LLM}(\text{prompt})$
+\State $\text{toc} \gets \text{ParseJSON}(\text{response})$
+
+\If{$\text{toc}$ is valid}
+    \State \Return $\text{toc}$
+\Else
+    \State \Return $\emptyset$
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+The TOC extraction prompt asks the LLM to identify:
+\begin{itemize}
+    \item Section titles
+    \item Page numbers
+    \item Hierarchical levels (chapter, section, subsection)
+\end{itemize}
+
+\textbf{Example TOC Entry}:
+\begin{lstlisting}[language=json]
+{
+  "title": "Financial Statements",
+  "page": 21,
+  "level": 1
+}
+\end{lstlisting}
+
+\subsection{Tree Building Strategies}
+
+\subsubsection{Strategy 1: Build from Existing TOC}
+
+If TOC is found, construct tree directly:
+
+\begin{algorithm}[H]
+\caption{Build Tree from TOC}
+\begin{algorithmic}[1]
+\Require TOC entries $T$, Pages $P$
+\Ensure Tree root $r$
+
+\State $r \gets \text{CreateNode}(\text{``Document''}, 1, |P|, 0)$
+\State $\text{stack} \gets [r]$
+
+\For{each entry $e$ in $T$}
+    \State $\text{title}, \text{page}, \text{level} \gets e$
+    
+    \Comment{Determine page range}
+    \State $p_{\text{start}} \gets e.\text{page}$
+    \State $p_{\text{end}} \gets \text{NextEntry}(e).\text{page} - 1$ or $|P|$
+    
+    \Comment{Extract content}
+    \State $\text{content} \gets \text{ConcatenatePages}(P, p_{\text{start}}, p_{\text{end}})$
+    
+    \Comment{Create node}
+    \State $v \gets \text{CreateNode}(\text{title}, p_{\text{start}}, p_{\text{end}}, \text{level}, \text{content})$
+    
+    \Comment{Add to tree at appropriate level}
+    \State $\text{parent} \gets \text{FindParent}(\text{stack}, \text{level})$
+    \State $\text{parent.children.append}(v)$
+\EndFor
+
+\State \Return $r$
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Strategy 2: LLM-Inferred Structure}
+
+When no TOC exists, use LLM to infer document structure:
+
+\begin{algorithm}[H]
+\caption{Infer Structure with LLM}
+\begin{algorithmic}[1]
+\Require Pages $P$, Sampling rate $s$
+\Ensure Tree root $r$
+
+\Comment{Sample pages throughout document}
+\State $\text{indices} \gets \text{SampleEvenly}(|P|, s)$
+\State $\text{samples} \gets [P[i] \text{ for } i \text{ in indices}]$
+
+\Comment{Ask LLM to identify structure}
+\State $\text{prompt} \gets \text{BuildStructurePrompt}(\text{samples})$
+\State $\text{response} \gets \text{LLM}(\text{prompt})$
+\State $\text{structure} \gets \text{ParseJSON}(\text{response})$
+
+\Comment{Build tree from inferred structure}
+\State $r \gets \text{BuildFromStructure}(\text{structure}, P)$
+
+\State \Return $r$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{examplebox}{LLM Structure Inference}
+The LLM analyzes content transitions and identifies logical sections:
+
+\textbf{Input}: Sampled pages showing introduction, methodology, results, discussion
+
+\textbf{LLM Output}:
+\begin{lstlisting}[language=json]
+[
+  {
+    "title": "Introduction",
+    "page_start": 1,
+    "page_end": 3,
+    "level": 1
+  },
+  {
+    "title": "Methodology",
+    "page_start": 4,
+    "page_end": 8,
+    "level": 1
+  },
+  ...
+]
+\end{lstlisting}
+\end{examplebox}
+
+\end{document}

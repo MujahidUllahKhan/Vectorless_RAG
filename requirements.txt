@@ -1,0 +1,22 @@
+# Vectorless RAG System - Complete Requirements
+
+# Core dependencies
+openai>=1.0.0
+PyPDF2>=3.0.0
+python-dotenv>=1.0.0
+
+# Web server
+flask>=3.0.0
+flask-cors>=4.0.0
+werkzeug>=3.0.0
+
+# Data processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Development
+jupyter>=1.0.0
+ipykernel>=6.0.0
+
+# Optional: For deployment
+gunicorn>=21.0.0
