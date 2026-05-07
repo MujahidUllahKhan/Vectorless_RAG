@@ -10,7 +10,7 @@
 
 [Live Demo](#-live-demo) • [Features](#-features) • [Quick Start](#-quick-start) • [Documentation](#-documentation) • [Architecture](#-architecture)
 
-![Vectorless RAG Demo](https://via.placeholder.com/800x400/667eea/ffffff?text=Vectorless+RAG+System+Demo)
+![Vectorless RAG Demo]([https://via.placeholder.com/800x400/667eea/ffffff?text=Vectorless+RAG+System+Demo](https://vectorless-rag.onrender.com/))
 
 </div>
 
