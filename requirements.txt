@@ -1,7 +1,19 @@
+# Core dependencies
 PyPDF2>=3.0.0
 python-dotenv>=1.0.0
+
+# Web server
 flask>=3.0.0
 flask-cors>=4.0.0
 werkzeug>=3.0.0
+
+# PageIndex library (professional RAG)
+pageindex>=0.1.0
+
+# LLM providers
 groq>=0.9.0
+openai>=1.0.0
+litellm>=1.0.0
+
+# Deployment
 gunicorn>=21.0.0
