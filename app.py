@@ -1,23 +1,18 @@
 """
-Flask API Server for Vectorless RAG System
-==========================================
-Provides REST API endpoints for the frontend chatbot
+Flask API Server for Vectorless RAG System with Groq
+====================================================
+This version works with Groq free API
 """
 
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 import os
-import sys
 import json
 from pathlib import Path
 from datetime import datetime
-
-# Add backend src to path
-sys.path.append(str(Path(__file__).parent / 'backend' / 'src'))
-
-from vectorless_rag import VectorlessRAG, TreeNode
-from supervised_rag import SupervisedRAGEvaluator
+import PyPDF2
+from groq import Groq
 
 # Initialize Flask app
 app = Flask(__name__, static_folder='frontend', static_url_path='')
@@ -30,16 +25,137 @@ UPLOAD_FOLDER.mkdir(exist_ok=True)
 CACHE_FOLDER.mkdir(exist_ok=True)
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 # Global state
-rag_systems = {}  # doc_id -> RAG instance
-document_metadata = {}  # doc_id -> metadata
+document_cache = {}
 
-# Initialize RAG with API key from environment
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-if not OPENAI_API_KEY:
-    print("⚠️ Warning: OPENAI_API_KEY not set in environment")
+# Get Groq API key
+GROQ_API_KEY = os.getenv('GROQ_API_KEY') or os.getenv('LLM_API_KEY')
+MODEL = os.getenv('LLM_MODEL', 'llama-3.3-70b-versatile')
+
+if GROQ_API_KEY:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    print("✅ Groq API configured")
+else:
+    groq_client = None
+    print("⚠️ Warning: GROQ_API_KEY not set")
+
+
+def extract_pdf_text(pdf_path):
+    """Extract all text from PDF"""
+    text_by_page = []
+    with open(pdf_path, 'rb') as file:
+        pdf_reader = PyPDF2.PdfReader(file)
+        num_pages = len(pdf_reader.pages)
+        
+        for page_num in range(num_pages):
+            page = pdf_reader.pages[page_num]
+            text = page.extract_text()
+            text_by_page.append({
+                'page': page_num + 1,
+                'text': text
+            })
+    
+    return text_by_page, num_pages
+
+
+def simple_chunk_text(pages_data, chunk_size=5):
+    """Create simple chunks from pages"""
+    chunks = []
+    
+    for i in range(0, len(pages_data), chunk_size):
+        chunk_pages = pages_data[i:i + chunk_size]
+        
+        combined_text = '\n\n'.join([
+            f"[Page {p['page']}]\n{p['text']}" 
+            for p in chunk_pages
+        ])
+        
+        chunks.append({
+            'id': f'chunk_{i//chunk_size + 1}',
+            'pages': f"{chunk_pages[0]['page']}-{chunk_pages[-1]['page']}",
+            'text': combined_text
+        })
+    
+    return chunks
+
+
+def search_relevant_chunks(query, chunks, groq_client, top_k=3):
+    """Use Groq to find relevant chunks"""
+    
+    # Create a summary of all chunks for the LLM
+    chunk_summaries = "\n\n".join([
+        f"Chunk {i+1} (Pages {c['pages']}):\n{c['text'][:500]}..."
+        for i, c in enumerate(chunks)
+    ])
+    
+    prompt = f"""You are analyzing a document to find relevant sections.
+
+AVAILABLE CHUNKS:
+{chunk_summaries}
+
+USER QUESTION: {query}
+
+Which chunks are most relevant to answer this question? Respond with ONLY a JSON array of chunk numbers (1-indexed).
+Example: {{"relevant_chunks": [1, 3, 5]}}
+
+Respond ONLY with valid JSON."""
+
+    try:
+        response = groq_client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        # Clean markdown if present
+        result_text = result_text.replace('```json', '').replace('```', '').strip()
+        
+        result = json.loads(result_text)
+        chunk_indices = result.get('relevant_chunks', [1, 2, 3])
+        
+        # Get the actual chunks
+        relevant = [chunks[i-1] for i in chunk_indices if 0 < i <= len(chunks)]
+        return relevant[:top_k]
+    
+    except Exception as e:
+        print(f"Error in search: {e}")
+        # Fallback: return first few chunks
+        return chunks[:top_k]
+
+
+def generate_answer(query, relevant_chunks, groq_client):
+    """Generate answer from relevant chunks"""
+    
+    context = "\n\n".join([
+        f"SOURCE: Pages {chunk['pages']}\n{chunk['text']}"
+        for chunk in relevant_chunks
+    ])
+    
+    prompt = f"""Answer the question using ONLY the provided context. Include specific page citations.
+
+CONTEXT FROM DOCUMENT:
+{context}
+
+QUESTION: {query}
+
+Provide a clear answer with citations to specific page numbers.
+
+ANSWER:"""
+
+    try:
+        response = groq_client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        
+        return response.choices[0].message.content
+    
+    except Exception as e:
+        return f"Error generating answer: {str(e)}"
 
 
 @app.route('/')
@@ -53,109 +169,64 @@ def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'documents_indexed': len(rag_systems),
-        'api_key_configured': bool(OPENAI_API_KEY)
+        'groq_configured': bool(GROQ_API_KEY),
+        'model': MODEL,
+        'documents': len(document_cache)
     })
 
 
 @app.route('/api/index', methods=['POST'])
 def index_document():
-    """
-    Index a PDF document
-    
-    Request:
-        - file: PDF file upload
-        - generate_summaries: bool (optional, default True)
-        - max_pages_per_node: int (optional, default 10)
-    
-    Response:
-        {
-            'doc_id': str,
-            'filename': str,
-            'status': 'indexing',
-            'message': str
-        }
-    """
+    """Index a PDF document"""
     try:
-        # Check if file is present
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided'}), 400
         
         file = request.files['file']
         
-        if file.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-        
-        if not file.filename.lower().endswith('.pdf'):
+        if not file.filename or not file.filename.lower().endswith('.pdf'):
             return jsonify({'error': 'Only PDF files are supported'}), 400
         
-        # Check API key
-        if not OPENAI_API_KEY:
-            return jsonify({'error': 'OpenAI API key not configured'}), 500
+        if not GROQ_API_KEY:
+            return jsonify({'error': 'Groq API key not configured'}), 500
         
         # Generate document ID
-        doc_id = datetime.now().strftime('%Y%m%d_%H%M%S_') + secure_filename(file.filename).replace('.pdf', '')
-        
-        # Save uploaded file
+        doc_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = secure_filename(file.filename)
-        file_path = UPLOAD_FOLDER / f"{doc_id}.pdf"
+        file_path = UPLOAD_FOLDER / f"{doc_id}_{filename}"
+        
+        # Save file
         file.save(file_path)
         
-        # Get parameters
-        generate_summaries = request.form.get('generate_summaries', 'true').lower() == 'true'
-        max_pages_per_node = int(request.form.get('max_pages_per_node', 10))
+        print(f"📄 Processing: {filename}")
         
-        # Initialize RAG system
-        rag = VectorlessRAG(
-            openai_api_key=OPENAI_API_KEY,
-            model='gpt-4o-mini'
-        )
+        # Extract text from PDF
+        pages_data, num_pages = extract_pdf_text(file_path)
         
-        # Index document
-        cache_path = CACHE_FOLDER / f"{doc_id}_tree.json"
+        # Create chunks
+        chunks = simple_chunk_text(pages_data)
         
-        print(f"📄 Indexing document: {filename}")
-        tree = rag.index_document(
-            pdf_path=str(file_path),
-            cache_path=str(cache_path),
-            max_pages_per_node=max_pages_per_node,
-            generate_summaries=generate_summaries
-        )
-        
-        # Count nodes and pages
-        def count_nodes(node):
-            return 1 + sum(count_nodes(child) for child in node.children)
-        
-        num_nodes = count_nodes(tree)
-        num_pages = tree.page_end
-        
-        # Store RAG system and metadata
-        rag_systems[doc_id] = rag
-        document_metadata[doc_id] = {
-            'doc_id': doc_id,
+        # Store in cache
+        document_cache[doc_id] = {
             'filename': filename,
-            'file_path': str(file_path),
-            'cache_path': str(cache_path),
             'num_pages': num_pages,
-            'num_nodes': num_nodes,
-            'indexed_at': datetime.now().isoformat(),
-            'status': 'ready'
+            'chunks': chunks,
+            'indexed_at': datetime.now().isoformat()
         }
         
-        print(f"✅ Document indexed: {filename} ({num_pages} pages, {num_nodes} nodes)")
+        print(f"✅ Indexed: {filename} ({num_pages} pages, {len(chunks)} chunks)")
         
         return jsonify({
             'doc_id': doc_id,
             'filename': filename,
             'num_pages': num_pages,
-            'num_nodes': num_nodes,
+            'num_nodes': len(chunks),
             'status': 'ready',
             'message': f'Successfully indexed {filename}'
         })
     
     except Exception as e:
-        print(f"❌ Error indexing document: {e}")
+        print(f"❌ Error indexing: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -163,25 +234,7 @@ def index_document():
 
 @app.route('/api/query', methods=['POST'])
 def query_documents():
-    """
-    Query indexed documents
-    
-    Request:
-        {
-            'question': str,
-            'doc_ids': [str] (optional, queries all if not provided),
-            'max_nodes': int (optional, default 5),
-            'domain_rules': str (optional)
-        }
-    
-    Response:
-        {
-            'answer': str,
-            'sources': [{'title': str, 'pages': str, 'document': str}],
-            'steps': [{'title': str, 'description': str, 'nodes': [...]}],
-            'query_time': float
-        }
-    """
+    """Query indexed documents"""
     try:
         data = request.get_json()
         
@@ -189,82 +242,76 @@ def query_documents():
             return jsonify({'error': 'No question provided'}), 400
         
         question = data['question']
-        max_nodes = data.get('max_nodes', 5)
-        domain_rules = data.get('domain_rules')
-        doc_ids = data.get('doc_ids')
         
-        # If no doc_ids specified, use all indexed documents
-        if not doc_ids:
-            doc_ids = list(rag_systems.keys())
-        
-        if not doc_ids:
+        if not document_cache:
             return jsonify({'error': 'No documents indexed'}), 400
         
-        # For now, query the first document
-        # TODO: Implement multi-document querying
-        doc_id = doc_ids[0]
+        if not GROQ_API_KEY:
+            return jsonify({'error': 'Groq API key not configured'}), 500
         
-        if doc_id not in rag_systems:
-            return jsonify({'error': f'Document {doc_id} not found'}), 404
-        
-        rag = rag_systems[doc_id]
+        # Use the most recent document
+        doc_id = list(document_cache.keys())[-1]
+        doc_data = document_cache[doc_id]
         
         print(f"❓ Query: {question}")
         
-        # Time the query
-        import time
-        start_time = time.time()
-        
-        # Execute query
-        result = rag.query(
-            question=question,
-            max_nodes=max_nodes,
-            domain_rules=domain_rules
+        # Search for relevant chunks
+        relevant_chunks = search_relevant_chunks(
+            question, 
+            doc_data['chunks'],
+            groq_client,
+            top_k=3
         )
         
-        query_time = time.time() - start_time
+        # Generate answer
+        answer = generate_answer(question, relevant_chunks, groq_client)
         
-        # Build detailed steps for frontend visualization
+        # Format response
+        sources = [
+            {
+                'title': f"Chunk {chunk['id']}",
+                'pages': chunk['pages'],
+                'document': doc_data['filename']
+            }
+            for chunk in relevant_chunks
+        ]
+        
         steps = [
             {
-                'title': 'Tree Search',
-                'description': f'LLM analyzed document structure and identified {len(result["node_ids"])} relevant sections',
+                'title': 'Document Search',
+                'description': f'Searched {len(doc_data["chunks"])} chunks from {doc_data["filename"]}',
                 'nodes': [
                     {
-                        'id': node_id,
-                        'title': source['title'],
-                        'pages': source['pages']
+                        'id': chunk['id'],
+                        'title': f"Chunk {chunk['id']}",
+                        'pages': chunk['pages']
                     }
-                    for node_id, source in zip(result['node_ids'], result['sources'])
+                    for chunk in relevant_chunks
                 ]
             },
             {
                 'title': 'Content Retrieval',
-                'description': f'Retrieved full text content from {len(result["sources"])} relevant nodes'
+                'description': f'Retrieved {len(relevant_chunks)} relevant chunks'
             },
             {
                 'title': 'Answer Generation',
-                'description': 'LLM synthesized answer from retrieved context with citations'
+                'description': 'Generated answer using Groq LLM with citations'
             }
         ]
         
-        # Add document name to sources
-        doc_filename = document_metadata[doc_id]['filename']
-        for source in result['sources']:
-            source['document'] = doc_filename
-        
-        print(f"✅ Answer generated in {query_time:.2f}s")
+        print(f"✅ Answer generated")
         
         return jsonify({
-            'answer': result['answer'],
-            'sources': result['sources'],
+            'answer': answer,
+            'sources': sources,
             'steps': steps,
-            'query_time': query_time,
-            'doc_id': doc_id
+            'doc_id': doc_id,
+            'llm_provider': 'groq',
+            'llm_model': MODEL
         })
     
     except Exception as e:
-        print(f"❌ Error processing query: {e}")
+        print(f"❌ Error in query: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -272,160 +319,31 @@ def query_documents():
 
 @app.route('/api/documents', methods=['GET'])
 def list_documents():
-    """
-    List all indexed documents
-    
-    Response:
+    """List all indexed documents"""
+    docs = [
         {
-            'documents': [
-                {
-                    'doc_id': str,
-                    'filename': str,
-                    'num_pages': int,
-                    'num_nodes': int,
-                    'indexed_at': str,
-                    'status': str
-                }
-            ]
-        }
-    """
-    try:
-        documents = list(document_metadata.values())
-        return jsonify({
-            'documents': documents,
-            'total': len(documents)
-        })
-    
-    except Exception as e:
-        print(f"❌ Error listing documents: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/documents/<doc_id>', methods=['DELETE'])
-def delete_document(doc_id):
-    """
-    Delete an indexed document
-    
-    Response:
-        {
-            'message': str,
-            'doc_id': str
-        }
-    """
-    try:
-        if doc_id not in rag_systems:
-            return jsonify({'error': 'Document not found'}), 404
-        
-        # Get metadata
-        metadata = document_metadata[doc_id]
-        
-        # Delete files
-        file_path = Path(metadata['file_path'])
-        cache_path = Path(metadata['cache_path'])
-        
-        if file_path.exists():
-            file_path.unlink()
-        
-        if cache_path.exists():
-            cache_path.unlink()
-        
-        # Remove from memory
-        del rag_systems[doc_id]
-        del document_metadata[doc_id]
-        
-        print(f"🗑️ Deleted document: {metadata['filename']}")
-        
-        return jsonify({
-            'message': f"Deleted document {metadata['filename']}",
-            'doc_id': doc_id
-        })
-    
-    except Exception as e:
-        print(f"❌ Error deleting document: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/tree/<doc_id>', methods=['GET'])
-def get_document_tree(doc_id):
-    """
-    Get document tree structure
-    
-    Response:
-        {
-            'doc_id': str,
-            'tree': {...}
-        }
-    """
-    try:
-        if doc_id not in rag_systems:
-            return jsonify({'error': 'Document not found'}), 404
-        
-        rag = rag_systems[doc_id]
-        tree_dict = rag.tree.to_dict()
-        
-        return jsonify({
             'doc_id': doc_id,
-            'tree': tree_dict
-        })
-    
-    except Exception as e:
-        print(f"❌ Error getting tree: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    """
-    Get system statistics
-    
-    Response:
-        {
-            'total_documents': int,
-            'total_pages': int,
-            'total_nodes': int,
-            'total_queries': int
+            'filename': data['filename'],
+            'num_pages': data['num_pages'],
+            'num_nodes': len(data['chunks']),
+            'indexed_at': data['indexed_at'],
+            'status': 'ready'
         }
-    """
-    try:
-        total_pages = sum(meta['num_pages'] for meta in document_metadata.values())
-        total_nodes = sum(meta['num_nodes'] for meta in document_metadata.values())
-        
-        return jsonify({
-            'total_documents': len(document_metadata),
-            'total_pages': total_pages,
-            'total_nodes': total_nodes,
-            'api_configured': bool(OPENAI_API_KEY)
-        })
+        for doc_id, data in document_cache.items()
+    ]
     
-    except Exception as e:
-        print(f"❌ Error getting stats: {e}")
-        return jsonify({'error': str(e)}), 500
+    return jsonify({
+        'documents': docs,
+        'total': len(docs)
+    })
 
 
 if __name__ == '__main__':
     print("=" * 80)
-    print("VECTORLESS RAG API SERVER")
+    print("VECTORLESS RAG - GROQ VERSION")
     print("=" * 80)
-    print()
-    
-    if not OPENAI_API_KEY:
-        print("⚠️ WARNING: OPENAI_API_KEY not set!")
-        print("   Please set the environment variable before indexing documents")
-        print()
-    else:
-        print("✅ OpenAI API key configured")
-        print()
-    
-    print("Server starting on http://localhost:5000")
-    print()
-    print("API Endpoints:")
-    print("  POST   /api/index       - Index a PDF document")
-    print("  POST   /api/query       - Query indexed documents")
-    print("  GET    /api/documents   - List all documents")
-    print("  DELETE /api/documents/<id> - Delete a document")
-    print("  GET    /api/tree/<id>   - Get document tree")
-    print("  GET    /api/stats       - Get system statistics")
+    print(f"Model: {MODEL}")
+    print(f"Groq API: {'✅ Configured' if GROQ_API_KEY else '❌ Not configured'}")
     print("=" * 80)
-    print()
     
     app.run(debug=True, host='0.0.0.0', port=5000)
