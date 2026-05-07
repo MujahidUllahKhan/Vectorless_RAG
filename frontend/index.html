@@ -815,19 +815,18 @@
             const loadingId = addLoadingMessage();
 
             try {
-                // TODO: Replace with actual API call
-                // const response = await fetch('/api/query', {
-                //     method: 'POST',
-                //     headers: { 'Content-Type': 'application/json' },
-                //     body: JSON.stringify({ question: message })
-                // });
-                // const result = await response.json();
-
-                // Simulate API delay
-                await new Promise(resolve => setTimeout(resolve, 2000));
-
-                // Simulate response
-                const result = generateMockResponse(message);
+                // Call real API
+                const response = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: message })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API error: ${response.status}`);
+                }
+                
+                const result = await response.json();
 
                 removeMessage(loadingId);
                 addMessage({
@@ -842,40 +841,11 @@
                 updateStats();
             } catch (error) {
                 removeMessage(loadingId);
-                showToast('Failed to get response', 'error');
+                showToast(`Failed to get response: ${error.message}`, 'error');
+                console.error('Query error:', error);
             } finally {
                 sendButton.disabled = false;
             }
-        }
-
-        function generateMockResponse(question) {
-            return {
-                answer: `Based on the documents, here's what I found regarding "${question}":\n\nThe research methodology employed a mixed-methods approach combining quantitative surveys (n=500) with qualitative interviews (n=25). The study was conducted over a 12-month period from January 2024 to December 2024.\n\nKey findings include:\n1. 78% of participants reported positive outcomes\n2. Statistical significance (p < 0.05) was observed in the primary metric\n3. Secondary analysis revealed unexpected correlations with demographic factors\n\nThese results align with previous research while introducing novel insights into the domain.`,
-                steps: [
-                    {
-                        title: 'Tree Search',
-                        description: 'LLM analyzed document structure and identified relevant sections',
-                        nodes: [
-                            { id: 'node_0004', title: 'Methodology', pages: '10-15' },
-                            { id: 'node_0007', title: 'Results', pages: '22-28' },
-                            { id: 'node_0008', title: 'Discussion', pages: '29-35' }
-                        ]
-                    },
-                    {
-                        title: 'Content Retrieval',
-                        description: 'Retrieved full text content from 3 relevant nodes (7 pages total)'
-                    },
-                    {
-                        title: 'Answer Generation',
-                        description: 'LLM synthesized answer from retrieved context with citations'
-                    }
-                ],
-                sources: [
-                    { title: 'Methodology', pages: '10-15', document: 'research_paper.pdf' },
-                    { title: 'Results', pages: '22-28', document: 'research_paper.pdf' },
-                    { title: 'Discussion', pages: '29-35', document: 'research_paper.pdf' }
-                ]
-            };
         }
 
         function addMessage(message) {
