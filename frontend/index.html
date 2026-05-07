@@ -709,22 +709,26 @@
 
         async function indexDocument(doc) {
             try {
-                // TODO: Replace with actual API call
-                // const formData = new FormData();
-                // formData.append('file', doc.file);
-                // const response = await fetch('/api/index', {
-                //     method: 'POST',
-                //     body: formData
-                // });
-                // const result = await response.json();
+                // Call real API
+                const formData = new FormData();
+                formData.append('file', doc.file);
+                
+                const response = await fetch('/api/index', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Upload failed: ${response.status}`);
+                }
+                
+                const result = await response.json();
 
-                // Simulate indexing delay
-                await new Promise(resolve => setTimeout(resolve, 2000));
-
-                // Simulate results
+                // Update doc with real results
                 doc.status = 'ready';
-                doc.pages = Math.floor(Math.random() * 50) + 10;
-                doc.nodes = Math.floor(Math.random() * 20) + 5;
+                doc.doc_id = result.doc_id;
+                doc.pages = result.num_pages || 0;
+                doc.nodes = result.num_nodes || 0;
                 
                 state.totalPages += doc.pages;
                 state.totalNodes += doc.nodes;
@@ -736,7 +740,8 @@
             } catch (error) {
                 doc.status = 'error';
                 renderFileList();
-                showToast(`Failed to index ${doc.name}`, 'error');
+                showToast(`Failed to index ${doc.name}: ${error.message}`, 'error');
+                console.error('Index error:', error);
             }
         }
 
